@@ -5739,7 +5739,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                 "AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY",
             ):
-                val = _thread_local_env_value(k)
+                val = _thread_local_env_value(k).strip()
                 if val:
                     all_env[k] = val
             if any(all_env.get(env_var) for env_var in _anthropic_env_vars):

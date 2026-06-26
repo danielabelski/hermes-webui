@@ -92,6 +92,22 @@ def test_anthropic_token_env_var_surfaces_anthropic_models(monkeypatch, tmp_path
     assert groups["anthropic"]["models"], "Anthropic fallback should include model entries"
 
 
+def test_whitespace_only_anthropic_oauth_env_vars_do_not_surface_anthropic(monkeypatch, tmp_path):
+    """A whitespace-only ANTHROPIC_TOKEN / CLAUDE_CODE_OAUTH_TOKEN must NOT
+    false-positive the Anthropic provider (env values are stripped before the
+    availability check)."""
+    for ws_var in ("ANTHROPIC_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"):
+        _clear_provider_env(monkeypatch)
+        _force_env_fallback(monkeypatch)
+        monkeypatch.setenv(ws_var, "   \t  ")
+
+        result = _run_available_models_with_cfg(monkeypatch, tmp_path, {"model": {}})
+        groups = _provider_groups(result)
+        assert "anthropic" not in groups, (
+            f"a whitespace-only {ws_var} must not surface the Anthropic provider"
+        )
+
+
 def test_claude_code_oauth_token_env_var_surfaces_anthropic_models(monkeypatch, tmp_path):
     """CLAUDE_CODE_OAUTH_TOKEN should detect the Anthropic provider through fallback."""
     _clear_provider_env(monkeypatch)
