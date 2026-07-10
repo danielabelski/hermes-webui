@@ -16878,6 +16878,11 @@ def _handle_session_run_journal_stream_for_session(handler, parsed, session_id):
     _sse_set_write_deadline(handler)
 
     resume_event_id = _session_events_resume_event_id(handler, parsed)
+    # Baseline the journal at the EARLIEST point — before the preliminary active-run
+    # lookup AND the initial cursor replay below — so a run completing during either
+    # operation is detected by the idle wait loop rather than absorbed into a
+    # too-late baseline and silently lost (no stream left to attach afterward).
+    _idle_journal_fp = session_journal_fingerprint(session_id)
     active_stream_id = _active_run_stream_for_session(session_id)
     subscriber = None
     subscriber_stream = None
@@ -16934,14 +16939,6 @@ def _handle_session_run_journal_stream_for_session(handler, parsed, session_id):
             else:
                 replay_ok = True
                 replay_events = replay.get("events") or []
-        # Baseline the journal BEFORE the first live-attach attempt so a run that
-        # completes during that first attach (or during any keepalive tick) is
-        # detected. Capturing it after the first attach would fold a just-completed
-        # run into the baseline and silently miss it. Such a run updates the journal
-        # but never materializes an in-memory STREAMS entry to attach, so without
-        # this an idle subscriber (esp. a no-cursor client) would miss that run's
-        # transcript until manual refresh.
-        _idle_journal_fp = session_journal_fingerprint(session_id)
         subscriber, subscriber_stream, stream_snapshot, active_stream_id = attach_active_stream()
         if subscriber is None:
             if replay_ok:
