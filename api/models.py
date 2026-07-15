@@ -4043,9 +4043,27 @@ def _persisted_session_meta_prefix(sid) -> dict | None:
         return None
 
 
+def _session_sidecar_exists(sid) -> bool | None:
+    """Return whether *sid*'s sidecar file exists on disk.
+
+    True  = the sidecar is confirmed present.
+    False = the sidecar is confirmed absent (a truly never-persisted session).
+    None  = existence is indeterminate (unsafe id, or the stat raised).
+
+    ``_session_is_evictable`` uses this to distinguish a genuinely
+    never-persisted empty shell (safe to grace-evict once abandoned) from a
+    session whose count merely could not be read this pass (stay resident).
+    """
+    if not is_safe_session_id(sid):
+        return None
+    try:
+        return (SESSION_DIR / f'{sid}.json').exists()
+    except OSError:
+        return None
+
+
 # Grace window (seconds) during which a never-persisted, empty, draftless session
 # shell is protected from LRU eviction. new_session() defers the first disk write
-# until the first message (#1171), so a just-opened "New Conversation" tab lives
 # only in the SESSIONS cache; evicting it there permanently 404s the chat (#6083).
 # After this window a still-empty, still-draftless, never-saved shell is treated as
 # abandoned and becomes evictable again, so these shells can't grow unbounded past
@@ -4110,15 +4128,25 @@ def _session_is_evictable(s) -> bool:
     in_memory_count = len(getattr(s, 'messages', None) or [])
     disk_count = _persisted_message_count(sid)
     if disk_count is None:
-        # Never persisted. Keep it resident ONLY while it is a fresh or
-        # actively-composed shell; an old, draftless, never-saved shell is an
-        # abandoned "New Conversation" tab and must remain evictable so these
-        # shells cannot accumulate unbounded past the cache cap (#6083 follow-up).
+        # disk_count is None for TWO distinct reasons: the sidecar is confirmed
+        # absent (truly never persisted → this cache is the only copy), OR the
+        # sidecar exists but its count could not be read this pass (transient I/O,
+        # mid-write). Only the CONFIRMED-ABSENT case is eligible for grace-based
+        # shell eviction; an indeterminate existing-sidecar session stays resident
+        # (conservative — never grace-evict something we cannot prove is gone).
         if in_memory_count > 0:
             return False  # holds unsaved messages → never drop
         composer_draft = getattr(s, 'composer_draft', None)
         if composer_draft:
             return False  # user is composing (draft present) → keep resident
+        if _session_sidecar_exists(sid) is not False:
+            # Sidecar present or existence indeterminate → not a never-persisted
+            # shell; do not enter the abandoned-shell grace path.
+            return False
+        # Confirmed never-persisted empty draftless shell. Protect it while fresh
+        # (the compose window right after "New Conversation"); once stale it is an
+        # abandoned tab and becomes evictable so these shells cannot accumulate
+        # unbounded past the cache cap (#6083 follow-up).
         created_at = getattr(s, 'created_at', None)
         if isinstance(created_at, (int, float)):
             if (time.time() - created_at) <= _UNSAVED_SHELL_GRACE_S:
