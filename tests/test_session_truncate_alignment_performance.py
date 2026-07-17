@@ -174,6 +174,16 @@ class _UnhashableValue(_HashableValue):
     __hash__ = None
 
 
+class _UnhashableEqualValue:
+    def __init__(self, value):
+        self.value = value
+
+    def __eq__(self, other):
+        return self.value == other
+
+    __hash__ = None
+
+
 def test_alignment_preserves_cross_hashability_equality():
     context = [
         {"role": "assistant", "content": "id", "id": _UnhashableValue("same")},
@@ -213,6 +223,42 @@ def test_alignment_matches_old_matcher_for_non_reflexive_id():
     assert actual == expected == []
 
 
+def test_alignment_matches_unsafe_context_id_against_safe_display_id():
+    context = [
+        {"role": "system", "content": "prefix"},
+        {"role": "assistant", "content": "id-target", "id": True},
+        {"role": "assistant", "content": "tail"},
+    ]
+    display = [
+        {"role": "assistant", "content": "id-target", "id": 1},
+        {"role": "assistant", "content": "tail"},
+    ]
+
+    expected = _old_matcher(copy.deepcopy(context), copy.deepcopy(display), 1)
+    actual = session_ops.truncate_context_for_display_keep(context, display, 1)
+    assert actual == expected == context[:2]
+
+
+def test_alignment_matches_unsafe_context_timestamp_against_safe_display_timestamp():
+    context = [
+        {"role": "system", "content": "prefix"},
+        {
+            "role": "assistant",
+            "content": "timestamp-target",
+            "timestamp": _UnhashableEqualValue(7),
+        },
+        {"role": "assistant", "content": "tail"},
+    ]
+    display = [
+        {"role": "assistant", "content": "timestamp-target", "timestamp": 7},
+        {"role": "assistant", "content": "tail"},
+    ]
+
+    expected = _old_matcher(copy.deepcopy(context), copy.deepcopy(display), 1)
+    actual = session_ops.truncate_context_for_display_keep(context, display, 1)
+    assert actual == expected == context[:2]
+
+
 def test_alignment_matches_old_matcher_for_non_reflexive_timestamp():
     nan = float("nan")
     context = [
@@ -244,7 +290,8 @@ def test_alignment_matches_old_matcher_for_non_reflexive_hashable_object():
 def test_alignment_differential_randomized_against_origin_matcher():
     rng = random.Random(5096)
     roles = ["user", "assistant", "tool", None]
-    for _ in range(120):
+    collision_values = [True, False, 0, 0.0, 1, 1.0]
+    for _ in range(150):
         context_len = rng.randrange(0, 9)
         display_len = rng.randrange(0, 9)
         def make_row(index):
@@ -255,9 +302,9 @@ def test_alignment_differential_randomized_against_origin_matcher():
                 "content": rng.choice(["same", "other", ""]),
             }
             if rng.random() < 0.55:
-                row["id"] = rng.choice(["a", "b", None])
+                row["id"] = rng.choice(["a", "b", None, *collision_values])
             if rng.random() < 0.55:
-                row["timestamp"] = rng.choice([1, 2, None])
+                row["timestamp"] = rng.choice([1, 2, None, *collision_values])
             if rng.random() < 0.35:
                 row["tool_calls"] = [{"id": index % 2}]
             return row
